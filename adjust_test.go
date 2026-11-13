@@ -96,6 +96,73 @@ func BenchmarkInvert(b *testing.B) {
 	}
 }
 
+func TestFiltersZeroTransparentColors(t *testing.T) {
+	// Two pixels: a dirty fully transparent one and an opaque one.
+	src := &image.NRGBA{
+		Rect:   image.Rect(0, 0, 2, 1),
+		Stride: 2 * 4,
+		Pix: []uint8{
+			0x77, 0x88, 0x99, 0x00, 0x10, 0x20, 0x30, 0xff,
+		},
+	}
+
+	wantTransparent := [4]uint8{0, 0, 0, 0}
+
+	equal4 := func(got []uint8, want [4]uint8) bool {
+		return len(got) == 4 && got[0] == want[0] && got[1] == want[1] && got[2] == want[2] && got[3] == want[3]
+	}
+
+	check := func(t *testing.T, name string, got *image.NRGBA) {
+		t.Helper()
+		if !equal4(got.Pix[0:4], wantTransparent) {
+			t.Fatalf("%s: transparent pixel got %v want %v", name, got.Pix[0:4], wantTransparent)
+		}
+		if got.Pix[7] != 0xff {
+			t.Fatalf("%s: opaque alpha changed: got %d want 255", name, got.Pix[7])
+		}
+	}
+
+	t.Run("Grayscale", func(t *testing.T) {
+		got := Grayscale(src)
+		check(t, "Grayscale", got)
+		// Fixed pixel assertion for the opaque pixel:
+		// 0.299*16 + 0.587*32 + 0.114*48 = 28.9 -> rounds to 29.
+		want := [4]uint8{29, 29, 29, 0xff}
+		if !equal4(got.Pix[4:8], want) {
+			t.Fatalf("opaque pixel got %v want %v", got.Pix[4:8], want)
+		}
+	})
+
+	t.Run("Invert", func(t *testing.T) {
+		got := Invert(src)
+		check(t, "Invert", got)
+		want := [4]uint8{0xef, 0xdf, 0xcf, 0xff}
+		if !equal4(got.Pix[4:8], want) {
+			t.Fatalf("opaque pixel got %v want %v", got.Pix[4:8], want)
+		}
+	})
+
+	t.Run("AdjustBrightness", func(t *testing.T) {
+		got := AdjustBrightness(src, 10)
+		check(t, "AdjustBrightness", got)
+	})
+
+	t.Run("AdjustContrast", func(t *testing.T) {
+		got := AdjustContrast(src, 20)
+		check(t, "AdjustContrast", got)
+	})
+
+	t.Run("AdjustGamma", func(t *testing.T) {
+		got := AdjustGamma(src, 0.75)
+		check(t, "AdjustGamma", got)
+	})
+
+	t.Run("AdjustSigmoid", func(t *testing.T) {
+		got := AdjustSigmoid(src, 0.5, 3.0)
+		check(t, "AdjustSigmoid", got)
+	})
+}
+
 func TestAdjustSaturation(t *testing.T) {
 	testCases := []struct {
 		name string

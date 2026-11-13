@@ -73,7 +73,28 @@ func convolve(img image.Image, kernel []float64, options *ConvolveOptions) *imag
 	parallel(0, h, func(ys <-chan int) {
 		for y := range ys {
 			for x := 0; x < w; x++ {
-				var r, g, b float64
+				srcOff := y*src.Stride + x*4
+
+				// The alpha channel is never modified. Fully transparent
+				// output pixels always have fully transparent (zeroed) color.
+				if src.Pix[srcOff+3] == 0 {
+					dstOff := y*dst.Stride + x*4
+					d := dst.Pix[dstOff : dstOff+4 : dstOff+4]
+					d[0] = 0
+					d[1] = 0
+					d[2] = 0
+					d[3] = 0
+					continue
+				}
+
+				// Only the color channels are convolved. Colors of fully
+				// transparent neighbors are not sampled; when some
+				// neighbors are transparent, the remaining kernel weights
+				// are renormalized. When none of the neighbors is
+				// transparent, the computation is identical to the
+				// original one.
+				var r, g, b, ksum float64
+				skipped := false
 				for _, c := range coefs {
 					ix := x + c.x
 					if ix < 0 {
@@ -90,10 +111,21 @@ func convolve(img image.Image, kernel []float64, options *ConvolveOptions) *imag
 					}
 
 					off := iy*src.Stride + ix*4
-					s := src.Pix[off : off+3 : off+3]
+					s := src.Pix[off : off+4 : off+4]
+					if s[3] == 0 {
+						skipped = true
+						continue
+					}
 					r += float64(s[0]) * c.k
 					g += float64(s[1]) * c.k
 					b += float64(s[2]) * c.k
+					ksum += c.k
+				}
+
+				if skipped && ksum != 0 {
+					r /= ksum
+					g /= ksum
+					b /= ksum
 				}
 
 				if options.Abs {
@@ -114,7 +146,6 @@ func convolve(img image.Image, kernel []float64, options *ConvolveOptions) *imag
 					b += float64(options.Bias)
 				}
 
-				srcOff := y*src.Stride + x*4
 				dstOff := y*dst.Stride + x*4
 				d := dst.Pix[dstOff : dstOff+4 : dstOff+4]
 				d[0] = clamp(r)

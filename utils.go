@@ -98,6 +98,22 @@ func toNRGBA(img image.Image) *image.NRGBA {
 	return Clone(img)
 }
 
+// zeroTransparentColors sets the RGB channels of every fully transparent
+// pixel (alpha == 0) to zero. The alpha channel and all non-transparent
+// pixels are left untouched. This keeps transparent pixels free of stale
+// color values, which would otherwise bleed into neighboring pixels when
+// the image is blurred, resampled or otherwise filtered.
+func zeroTransparentColors(img *image.NRGBA) {
+	pix := img.Pix
+	for i := 3; i < len(pix); i += 4 {
+		if pix[i] == 0 {
+			pix[i-3] = 0
+			pix[i-2] = 0
+			pix[i-1] = 0
+		}
+	}
+}
+
 // rgbToHSL converts a color from RGB to HSL.
 func rgbToHSL(r, g, b uint8) (float64, float64, float64) {
 	rr := float64(r) / 255

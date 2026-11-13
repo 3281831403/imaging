@@ -12,7 +12,9 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/image/bmp"
 	"golang.org/x/image/tiff"
@@ -21,12 +23,16 @@ import (
 type fileSystem interface {
 	Create(string) (io.WriteCloser, error)
 	Open(string) (io.ReadCloser, error)
+	Rename(oldpath, newpath string) error
+	Remove(name string) error
 }
 
 type localFS struct{}
 
 func (localFS) Create(name string) (io.WriteCloser, error) { return os.Create(name) }
 func (localFS) Open(name string) (io.ReadCloser, error)    { return os.Open(name) }
+func (localFS) Rename(oldpath, newpath string) error       { return os.Rename(oldpath, newpath) }
+func (localFS) Remove(name string) error                   { return os.Remove(name) }
 
 var fs fileSystem = localFS{}
 
@@ -138,6 +144,19 @@ func (f Format) String() string {
 // ErrUnsupportedFormat means the given image format is not supported.
 var ErrUnsupportedFormat = errors.New("imaging: unsupported image format")
 
+// ErrEmptyImage means the image to encode has zero width or height and
+// therefore cannot be encoded.
+var ErrEmptyImage = errors.New("imaging: empty image cannot be encoded")
+
+// imageBounds returns the image bounds in a way that is safe even for a
+// nil image. A nil image is treated as an empty image.
+func imageBounds(img image.Image) image.Rectangle {
+	if img == nil {
+		return image.Rectangle{}
+	}
+	return img.Bounds()
+}
+
 // FormatFromExtension parses image format from filename extension:
 // "jpg" (or "jpeg"), "png", "gif", "tif" (or "tiff") and "bmp" are supported.
 func FormatFromExtension(ext string) (Format, error) {
@@ -214,7 +233,13 @@ func PNGCompressionLevel(level png.CompressionLevel) EncodeOption {
 }
 
 // Encode writes the image img to w in the specified format (JPEG, PNG, GIF, TIFF or BMP).
+// It returns ErrEmptyImage without writing anything if the image has zero
+// width or height.
 func Encode(w io.Writer, img image.Image, format Format, opts ...EncodeOption) error {
+	if imageBounds(img).Empty() {
+		return ErrEmptyImage
+	}
+
 	cfg := defaultEncodeConfig
 	for _, option := range opts {
 		option(&cfg)
@@ -257,6 +282,11 @@ func Encode(w io.Writer, img image.Image, format Format, opts ...EncodeOption) e
 // The format is determined from the filename extension:
 // "jpg" (or "jpeg"), "png", "gif", "tif" (or "tiff") and "bmp" are supported.
 //
+// The image is first written to a temporary file in the same directory and
+// then renamed to the destination, so an encoding failure never truncates
+// or removes an existing file. An empty (zero-sized) image is rejected with
+// ErrEmptyImage without touching the destination or its directory.
+//
 // Examples:
 //
 //	// Save the image as PNG.
@@ -270,16 +300,32 @@ func Save(img image.Image, filename string, opts ...EncodeOption) (err error) {
 	if err != nil {
 		return err
 	}
-	file, err := fs.Create(filename)
+	if imageBounds(img).Empty() {
+		return ErrEmptyImage
+	}
+
+	dir, name := filepath.Split(filename)
+	tmpName := filepath.Join(dir, ".imaging-tmp-"+name+"-"+strconv.FormatInt(time.Now().UnixNano(), 10))
+
+	file, err := fs.Create(tmpName)
 	if err != nil {
 		return err
 	}
-	err = Encode(file, img, f, opts...)
-	errc := file.Close()
-	if err == nil {
-		err = errc
+
+	if err = Encode(file, img, f, opts...); err != nil {
+		file.Close()
+		fs.Remove(tmpName)
+		return err
 	}
-	return err
+	if err = file.Close(); err != nil {
+		fs.Remove(tmpName)
+		return err
+	}
+	if err = fs.Rename(tmpName, filename); err != nil {
+		fs.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 // orientation is an EXIF flag that specifies the transformation

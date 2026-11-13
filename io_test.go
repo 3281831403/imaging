@@ -20,12 +20,14 @@ var (
 	errCreate = errors.New("failed to create file")
 	errClose  = errors.New("failed to close file")
 	errOpen   = errors.New("failed to open file")
+	errRename = errors.New("failed to rename file")
+	errRemove = errors.New("failed to remove file")
 )
 
 type badFS struct{}
 
 func (badFS) Create(name string) (io.WriteCloser, error) {
-	if name == "badFile.jpg" {
+	if strings.HasPrefix(filepath.Base(name), ".imaging-tmp-badFile.jpg") {
 		return badFile{ioutil.Discard}, nil
 	}
 	return nil, errCreate
@@ -33,6 +35,14 @@ func (badFS) Create(name string) (io.WriteCloser, error) {
 
 func (badFS) Open(name string) (io.ReadCloser, error) {
 	return nil, errOpen
+}
+
+func (badFS) Rename(oldpath, newpath string) error {
+	return errRename
+}
+
+func (badFS) Remove(name string) error {
+	return errRemove
 }
 
 type badFile struct {
@@ -171,6 +181,150 @@ func TestOpenSave(t *testing.T) {
 	if err != errOpen {
 		t.Fatalf("got error %v want errOpen", err)
 	}
+}
+
+func TestEncodeEmptyImage(t *testing.T) {
+	emptyImages := []image.Image{
+		&image.NRGBA{},
+		&image.NRGBA{Rect: image.Rect(0, 0, 0, 5)},
+		&image.NRGBA{Rect: image.Rect(0, 0, 5, 0)},
+		nil,
+	}
+	for _, format := range []Format{JPEG, PNG, GIF, TIFF, BMP} {
+		for _, img := range emptyImages {
+			buf := &bytes.Buffer{}
+			err := Encode(buf, img, format)
+			if err != ErrEmptyImage {
+				t.Fatalf("format %v, empty image: got error %v want ErrEmptyImage", format, err)
+			}
+			if buf.Len() != 0 {
+				t.Fatalf("format %v: encoder wrote %d bytes for an empty image", format, buf.Len())
+			}
+		}
+	}
+}
+
+func TestSaveEmptyImage(t *testing.T) {
+	dir, err := ioutil.TempDir("", "imaging")
+	if err != nil {
+		t.Fatalf("failed to create temporary directory: %v", err)
+	}
+	defer os.RemoveAll(dir)
+
+	// Pre-existing file that must survive the failed Save unchanged.
+	filename := filepath.Join(dir, "existing.png")
+	original := []byte("do not touch me")
+	if err := ioutil.WriteFile(filename, original, 0o600); err != nil {
+		t.Fatalf("failed to write seed file: %v", err)
+	}
+
+	for _, ext := range []string{"jpg", "png", "gif", "bmp", "tif", "tiff"} {
+		emptyName := filepath.Join(dir, "empty."+ext)
+		if err := Save(&image.NRGBA{}, emptyName); err != ErrEmptyImage {
+			t.Fatalf("ext %q: got error %v want ErrEmptyImage", ext, err)
+		}
+		if _, err := os.Stat(emptyName); !os.IsNotExist(err) {
+			t.Fatalf("ext %q: empty image file was created", ext)
+		}
+	}
+
+	// The existing file must be untouched.
+	got, err := ioutil.ReadFile(filename)
+	if err != nil {
+		t.Fatalf("failed to read existing file: %v", err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("existing file was modified: got %q want %q", got, original)
+	}
+
+	// No leftover temporary files may remain in the directory.
+	entries, err := ioutil.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("failed to read directory: %v", err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".imaging-tmp-") {
+			t.Fatalf("temporary file left behind: %s", entry.Name())
+		}
+	}
+}
+
+func TestSaveFailureKeepsExistingFile(t *testing.T) {
+	dir, err := ioutil.TempDir("", "imaging")
+	if err != nil {
+		t.Fatalf("failed to create temporary directory: %v", err)
+	}
+	defer os.RemoveAll(dir)
+
+	img := image.NewNRGBA(image.Rect(0, 0, 2, 2))
+	for i := range img.Pix {
+		img.Pix[i] = 0xff
+	}
+
+	t.Run("create failure leaves existing file intact", func(t *testing.T) {
+		filename := filepath.Join(dir, "create-fail.jpg")
+		original := []byte("original content")
+		if err := ioutil.WriteFile(filename, original, 0o600); err != nil {
+			t.Fatalf("failed to write seed file: %v", err)
+		}
+
+		prevFS := fs
+		fs = badFS{}
+		defer func() { fs = prevFS }()
+
+		if err := Save(img, filename); err != errCreate {
+			t.Fatalf("got error %v want errCreate", err)
+		}
+
+		got, err := ioutil.ReadFile(filename)
+		if err != nil {
+			t.Fatalf("failed to read existing file: %v", err)
+		}
+		if !bytes.Equal(got, original) {
+			t.Fatalf("existing file was modified: got %q want %q", got, original)
+		}
+	})
+
+	t.Run("close failure leaves existing file intact", func(t *testing.T) {
+		filename := filepath.Join(dir, "close-fail.jpg")
+		original := []byte("original content")
+		if err := ioutil.WriteFile(filename, original, 0o600); err != nil {
+			t.Fatalf("failed to write seed file: %v", err)
+		}
+
+		prevFS := fs
+		fs = badFS{}
+		defer func() { fs = prevFS }()
+
+		if err := Save(img, "badFile.jpg"); err != errClose {
+			t.Fatalf("got error %v want errClose", err)
+		}
+
+		got, err := ioutil.ReadFile(filename)
+		if err != nil {
+			t.Fatalf("failed to read existing file: %v", err)
+		}
+		if !bytes.Equal(got, original) {
+			t.Fatalf("existing file was modified: got %q want %q", got, original)
+		}
+	})
+
+	t.Run("successful save replaces atomically", func(t *testing.T) {
+		filename := filepath.Join(dir, "good.png")
+		if err := ioutil.WriteFile(filename, []byte("old"), 0o600); err != nil {
+			t.Fatalf("failed to write seed file: %v", err)
+		}
+		if err := Save(img, filename); err != nil {
+			t.Fatalf("save failed: %v", err)
+		}
+		decoded, err := Open(filename)
+		if err != nil {
+			t.Fatalf("failed to reopen saved file: %v", err)
+		}
+		if decoded.Bounds() != img.Rect {
+			t.Fatalf("saved bounds %v want %v", decoded.Bounds(), img.Rect)
+		}
+	})
 }
 
 func TestFormats(t *testing.T) {

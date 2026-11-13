@@ -7,6 +7,8 @@ import (
 )
 
 // Grayscale produces a grayscale version of the image.
+// The alpha channel is preserved unchanged and fully transparent pixels
+// keep their color channels zeroed.
 func Grayscale(img image.Image) *image.NRGBA {
 	src := newScanner(img)
 	dst := image.NewNRGBA(image.Rect(0, 0, src.w, src.h))
@@ -15,15 +17,22 @@ func Grayscale(img image.Image) *image.NRGBA {
 			i := y * dst.Stride
 			src.scan(0, y, src.w, y+1, dst.Pix[i:i+src.w*4])
 			for x := 0; x < src.w; x++ {
-				d := dst.Pix[i : i+3 : i+3]
-				r := d[0]
-				g := d[1]
-				b := d[2]
-				f := 0.299*float64(r) + 0.587*float64(g) + 0.114*float64(b)
-				y := uint8(f + 0.5)
-				d[0] = y
-				d[1] = y
-				d[2] = y
+				d := dst.Pix[i : i+4 : i+4]
+				if d[3] == 0 {
+					// Fully transparent pixels keep no color information.
+					d[0] = 0
+					d[1] = 0
+					d[2] = 0
+				} else {
+					r := d[0]
+					g := d[1]
+					b := d[2]
+					f := 0.299*float64(r) + 0.587*float64(g) + 0.114*float64(b)
+					yv := uint8(f + 0.5)
+					d[0] = yv
+					d[1] = yv
+					d[2] = yv
+				}
 				i += 4
 			}
 		}
@@ -32,6 +41,8 @@ func Grayscale(img image.Image) *image.NRGBA {
 }
 
 // Invert produces an inverted (negated) version of the image.
+// The alpha channel is preserved unchanged and fully transparent pixels
+// keep their color channels zeroed.
 func Invert(img image.Image) *image.NRGBA {
 	src := newScanner(img)
 	dst := image.NewNRGBA(image.Rect(0, 0, src.w, src.h))
@@ -40,10 +51,17 @@ func Invert(img image.Image) *image.NRGBA {
 			i := y * dst.Stride
 			src.scan(0, y, src.w, y+1, dst.Pix[i:i+src.w*4])
 			for x := 0; x < src.w; x++ {
-				d := dst.Pix[i : i+3 : i+3]
-				d[0] = 255 - d[0]
-				d[1] = 255 - d[1]
-				d[2] = 255 - d[2]
+				d := dst.Pix[i : i+4 : i+4]
+				if d[3] == 0 {
+					// Fully transparent pixels keep no color information.
+					d[0] = 0
+					d[1] = 0
+					d[2] = 0
+				} else {
+					d[0] = 255 - d[0]
+					d[1] = 255 - d[1]
+					d[2] = 255 - d[2]
+				}
 				i += 4
 			}
 		}
@@ -235,6 +253,8 @@ func sigmoid(a, b, x float64) float64 {
 }
 
 // adjustLUT applies the given lookup table to the colors of the image.
+// The alpha channel is preserved unchanged and fully transparent pixels
+// keep their color channels zeroed.
 func adjustLUT(img image.Image, lut []uint8) *image.NRGBA {
 	src := newScanner(img)
 	dst := image.NewNRGBA(image.Rect(0, 0, src.w, src.h))
@@ -244,10 +264,17 @@ func adjustLUT(img image.Image, lut []uint8) *image.NRGBA {
 			i := y * dst.Stride
 			src.scan(0, y, src.w, y+1, dst.Pix[i:i+src.w*4])
 			for x := 0; x < src.w; x++ {
-				d := dst.Pix[i : i+3 : i+3]
-				d[0] = lut[d[0]]
-				d[1] = lut[d[1]]
-				d[2] = lut[d[2]]
+				d := dst.Pix[i : i+4 : i+4]
+				if d[3] == 0 {
+					// Fully transparent pixels keep no color information.
+					d[0] = 0
+					d[1] = 0
+					d[2] = 0
+				} else {
+					d[0] = lut[d[0]]
+					d[1] = lut[d[1]]
+					d[2] = lut[d[2]]
+				}
 				i += 4
 			}
 		}

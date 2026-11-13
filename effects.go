@@ -134,6 +134,9 @@ func blurVertical(img image.Image, kernel []float64) *image.NRGBA {
 // Sharpen produces a sharpened version of the image.
 // Sigma parameter must be positive and indicates how much the image will be sharpened.
 //
+// Only the color channels are sharpened; the alpha channel is preserved
+// unchanged. Colors of fully transparent pixels are always zeroed.
+//
 // Example:
 //
 //	dstImage := imaging.Sharpen(srcImage, 3.5)
@@ -152,15 +155,26 @@ func Sharpen(img image.Image, sigma float64) *image.NRGBA {
 		for y := range ys {
 			src.scan(0, y, src.w, y+1, scanLine)
 			j := y * dst.Stride
-			for i := 0; i < src.w*4; i++ {
-				val := int(scanLine[i])<<1 - int(blurred.Pix[j])
-				if val < 0 {
-					val = 0
-				} else if val > 0xff {
-					val = 0xff
+			for i := 0; i < src.w*4; i += 4 {
+				// The alpha channel is taken from the source unchanged.
+				dst.Pix[j+3] = scanLine[i+3]
+				if scanLine[i+3] == 0 {
+					// Fully transparent pixels keep no color information.
+					dst.Pix[j] = 0
+					dst.Pix[j+1] = 0
+					dst.Pix[j+2] = 0
+				} else {
+					for ch := 0; ch < 3; ch++ {
+						val := int(scanLine[i+ch])<<1 - int(blurred.Pix[j+ch])
+						if val < 0 {
+							val = 0
+						} else if val > 0xff {
+							val = 0xff
+						}
+						dst.Pix[j+ch] = uint8(val)
+					}
 				}
-				dst.Pix[j] = uint8(val)
-				j++
+				j += 4
 			}
 		}
 	})

@@ -88,7 +88,10 @@ func Resize(img image.Image, width, height int, filter ResampleFilter) *image.NR
 	}
 
 	if srcW == dstW && srcH == dstH {
-		return Clone(img)
+		dst := Clone(img)
+		// Fully transparent pixels must not retain any color information.
+		zeroTransparentColors(dst)
+		return dst
 	}
 
 	if filter.Support <= 0 {
@@ -211,6 +214,8 @@ func resizeNearest(img image.Image, width, height int) *image.NRGBA {
 		})
 	}
 
+	// Fully transparent pixels must not retain any color information.
+	zeroTransparentColors(dst)
 	return dst
 }
 
@@ -237,7 +242,10 @@ func Fit(img image.Image, width, height int, filter ResampleFilter) *image.NRGBA
 	}
 
 	if srcW <= maxW && srcH <= maxH {
-		return Clone(img)
+		dst := Clone(img)
+		// Fully transparent pixels must not retain any color information.
+		zeroTransparentColors(dst)
+		return dst
 	}
 
 	srcAspectRatio := float64(srcW) / float64(srcH)
@@ -278,7 +286,10 @@ func Fill(img image.Image, width, height int, anchor Anchor, filter ResampleFilt
 	}
 
 	if srcW == dstW && srcH == dstH {
-		return Clone(img)
+		dst := Clone(img)
+		// Fully transparent pixels must not retain any color information.
+		zeroTransparentColors(dst)
+		return dst
 	}
 
 	if srcW >= 100 && srcH >= 100 {

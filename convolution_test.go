@@ -183,6 +183,95 @@ func TestConvolve3x3(t *testing.T) {
 	}
 }
 
+func TestConvolveTransparent(t *testing.T) {
+	// 1x4 image: two fully transparent pixels with dirty colors on the
+	// left, one opaque red pixel and one semi-transparent green pixel.
+	src := &image.NRGBA{
+		Rect:   image.Rect(0, 0, 4, 1),
+		Stride: 4 * 4,
+		Pix: []uint8{
+			0x11, 0x22, 0x33, 0x00, 0x44, 0x55, 0x66, 0x00,
+			0xff, 0x00, 0x00, 0xff, 0x00, 0xff, 0x00, 0x80,
+		},
+	}
+
+	t.Run("identity keeps alpha and drops transparent color", func(t *testing.T) {
+		kernel := [9]float64{
+			0, 0, 0,
+			0, 1, 0,
+			0, 0, 0,
+		}
+		got := Convolve3x3(src, kernel, nil)
+		want := &image.NRGBA{
+			Rect:   image.Rect(0, 0, 4, 1),
+			Stride: 4 * 4,
+			// Alpha is preserved exactly and transparent pixels are zeroed.
+			Pix: []uint8{
+				0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+				0xff, 0x00, 0x00, 0xff, 0x00, 0xff, 0x00, 0x80,
+			},
+		}
+		if !compareNRGBA(got, want, 0) {
+			t.Fatalf("got result %#v want %#v", got, want)
+		}
+	})
+
+	t.Run("normalized box ignores transparent neighbors", func(t *testing.T) {
+		// A normalized 3x3 box kernel: after skipping the transparent taps,
+		// the remaining weights are renormalized so each visible neighbor
+		// gets an equal share.
+		kernel := [9]float64{
+			1, 1, 1,
+			1, 1, 1,
+			1, 1, 1,
+		}
+		got := Convolve3x3(src, kernel, &ConvolveOptions{Normalize: true})
+
+		// Pixel (2,0) neighborhood (clamped): transparent, red, green.
+		// Red and green each get weight 1/2 after renormalization:
+		// R = G = 255/2 = 127.5, which clamp() rounds to 127 (0x7f).
+		// The alpha channel is preserved: 255 for red, 128 for green.
+		want := &image.NRGBA{
+			Rect:   image.Rect(0, 0, 4, 1),
+			Stride: 4 * 4,
+			Pix: []uint8{
+				0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+				0x7f, 0x7f, 0x00, 0xff, 0x55, 0xaa, 0x00, 0x80,
+			},
+		}
+		if !compareNRGBA(got, want, 0) {
+			t.Fatalf("got result %#v want %#v", got, want)
+		}
+	})
+
+	t.Run("edge detection kernel does not darken through transparency", func(t *testing.T) {
+		// Laplacian kernel (sum 0). The transparent neighbors are skipped
+		// and the remaining weights are renormalized, so the opaque red
+		// pixel must not turn black because of the transparent neighbors.
+		kernel := [9]float64{
+			-1, -1, -1,
+			-1, 8, -1,
+			-1, -1, -1,
+		}
+		got := Convolve3x3(src, kernel, nil)
+
+		// Pixel (0,0) is fully transparent: must stay (0,0,0,0).
+		d := got.Pix[0:4]
+		if d[0] != 0 || d[1] != 0 || d[2] != 0 || d[3] != 0 {
+			t.Fatalf("transparent pixel changed: got %v want [0 0 0 0]", d)
+		}
+		// Pixel (2,0) alpha must be preserved.
+		if got.Pix[2*4+3] != 0xff {
+			t.Fatalf("alpha of opaque pixel changed: got %d want 255", got.Pix[2*4+3])
+		}
+		// With only the red center (weight 8) and the green neighbor
+		// (weight -1) contributing, the result must not be black.
+		if got.Pix[2*4] == 0 && got.Pix[2*4+1] == 0 && got.Pix[2*4+2] == 0 {
+			t.Fatalf("opaque pixel turned black through transparent neighbors: %v", got.Pix[8:12])
+		}
+	})
+}
+
 func TestConvolve5x5(t *testing.T) {
 	testCases := []struct {
 		name    string

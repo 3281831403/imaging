@@ -208,6 +208,69 @@ func TestResize(t *testing.T) {
 	}
 }
 
+func TestResizeTransparentColorsZeroed(t *testing.T) {
+	// 2x2 source where the transparent pixels carry dirty RGB values.
+	src := &image.NRGBA{
+		Rect:   image.Rect(0, 0, 2, 2),
+		Stride: 2 * 4,
+		Pix: []uint8{
+			0xaa, 0xbb, 0xcc, 0x00, 0xff, 0x00, 0x00, 0xff,
+			0x00, 0xff, 0x00, 0xff, 0x11, 0x22, 0x33, 0x00,
+		},
+	}
+
+	check := func(t *testing.T, got *image.NRGBA) {
+		t.Helper()
+		for i := 3; i < len(got.Pix); i += 4 {
+			if got.Pix[i] == 0 {
+				if got.Pix[i-3] != 0 || got.Pix[i-2] != 0 || got.Pix[i-1] != 0 {
+					t.Fatalf("transparent pixel keeps color at offset %d: %v", i-3, got.Pix[i-3:i+1])
+				}
+			}
+		}
+	}
+
+	t.Run("same size clone path", func(t *testing.T) {
+		got := Resize(src, 2, 2, Box)
+		if got.Rect != src.Rect {
+			t.Fatalf("bounds changed: got %v want %v", got.Rect, src.Rect)
+		}
+		check(t, got)
+	})
+
+	t.Run("nearest neighbor upscale", func(t *testing.T) {
+		got := Resize(src, 4, 4, NearestNeighbor)
+		if got.Rect.Dx() != 4 || got.Rect.Dy() != 4 {
+			t.Fatalf("unexpected size: %v", got.Rect)
+		}
+		check(t, got)
+		// Fixed pixel assertion: the top-left pixel is the scaled-up
+		// transparent source pixel and must be fully zeroed.
+		want := [4]uint8{0, 0, 0, 0}
+		if got.Pix[0] != want[0] || got.Pix[1] != want[1] || got.Pix[2] != want[2] || got.Pix[3] != want[3] {
+			t.Fatalf("got %v want %v", got.Pix[0:4], want)
+		}
+	})
+
+	t.Run("nearest neighbor downscale", func(t *testing.T) {
+		got := Resize(src, 1, 1, NearestNeighbor)
+		check(t, got)
+	})
+
+	t.Run("filtered resize", func(t *testing.T) {
+		got := Resize(src, 3, 3, Linear)
+		if got.Rect.Dx() != 3 || got.Rect.Dy() != 3 {
+			t.Fatalf("unexpected size: %v", got.Rect)
+		}
+		check(t, got)
+	})
+
+	t.Run("fit and fill shortcuts", func(t *testing.T) {
+		check(t, Fit(src, 4, 4, Box))
+		check(t, Fill(src, 2, 2, Center, Box))
+	})
+}
+
 func TestResampleFilters(t *testing.T) {
 	for _, filter := range []ResampleFilter{
 		NearestNeighbor,
